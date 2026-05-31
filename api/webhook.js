@@ -1,4 +1,6 @@
 const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 
 // ─── Environment Variables ───────────────────────────────
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -62,8 +64,25 @@ async function redisSet(key, value) {
 //  CONFIG MANAGEMENT
 // ══════════════════════════════════════════════════════════
 async function getConfig() {
-  const spc_st = (await redisGet('shopee_bot:spc_st')) || process.env.SPC_ST || '';
-  const proxy = (await redisGet('shopee_bot:proxy')) || process.env.PROXY || '';
+  let spc_st = (await redisGet('shopee_bot:spc_st')) || process.env.SPC_ST || '';
+  let proxy = (await redisGet('shopee_bot:proxy')) || process.env.PROXY || '';
+
+  // Fallback to local config.json if not found in Redis / env
+  if (!spc_st || !proxy) {
+    try {
+      const configPath = path.join(process.cwd(), 'config.json');
+      if (fs.existsSync(configPath)) {
+        const raw = fs.readFileSync(configPath, 'utf-8');
+        const localConfig = JSON.parse(raw);
+        if (!spc_st) spc_st = localConfig.spc_st || '';
+        if (!proxy) proxy = localConfig.proxy || '';
+        console.log('Loaded config fallback from config.json');
+      }
+    } catch (err) {
+      console.log('Failed to load local config.json fallback:', err.message);
+    }
+  }
+
   return { spc_st, proxy };
 }
 
