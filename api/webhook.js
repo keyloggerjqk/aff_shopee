@@ -21,22 +21,30 @@ const SHOPEE_PATTERNS = [
 //  UPSTASH REDIS (lưu config: spc_st, proxy)
 // ══════════════════════════════════════════════════════════
 async function redisGet(key) {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    console.log('Upstash Redis not configured, skipping get.');
+    return null;
+  }
   try {
     const res = await fetch(`${UPSTASH_URL}/get/${key}`, {
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
     });
     const data = await res.json();
+    console.log(`Redis GET ${key} status:`, res.status);
     return data.result;
-  } catch {
+  } catch (err) {
+    console.error(`Redis GET ${key} error:`, err.message);
     return null;
   }
 }
 
 async function redisSet(key, value) {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    console.log('Upstash Redis not configured, skipping set.');
+    return;
+  }
   try {
-    await fetch(UPSTASH_URL, {
+    const res = await fetch(UPSTASH_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${UPSTASH_TOKEN}`,
@@ -44,6 +52,7 @@ async function redisSet(key, value) {
       },
       body: JSON.stringify(['SET', key, value]),
     });
+    console.log(`Redis SET ${key} status:`, res.status);
   } catch (err) {
     console.error('Redis SET error:', err.message);
   }
