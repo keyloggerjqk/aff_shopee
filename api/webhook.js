@@ -66,17 +66,28 @@ async function setConfigValue(key, value) {
 //  TELEGRAM HELPERS
 // ══════════════════════════════════════════════════════════
 async function sendMessage(chatId, text, options = {}) {
-  return fetch(`${TELEGRAM_API}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-      ...options,
-    }),
-  });
+  const url = `${TELEGRAM_API}/sendMessage`;
+  console.log(`Sending message to ${chatId}...`);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        ...options,
+      }),
+    });
+    const data = await res.json();
+    console.log('Telegram API response status:', res.status);
+    console.log('Telegram API response data:', JSON.stringify(data));
+    return res;
+  } catch (err) {
+    console.error('Error in sendMessage fetch:', err.message);
+    throw err;
+  }
 }
 
 function escapeHtml(text) {
@@ -133,8 +144,12 @@ async function fetchAffiliate(productUrl) {
 //  HANDLE TELEGRAM UPDATES
 // ══════════════════════════════════════════════════════════
 async function handleUpdate(update) {
+  console.log('Incoming Telegram Update:', JSON.stringify(update));
   const msg = update.message;
-  if (!msg || !msg.text) return;
+  if (!msg || !msg.text) {
+    console.log('No message or message text in update, skipping.');
+    return;
+  }
 
   const chatId = msg.chat.id;
   const text = msg.text;
