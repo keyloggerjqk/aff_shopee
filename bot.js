@@ -27,18 +27,51 @@ if (!ADMIN_ID) {
   console.error('⚠️  ADMIN_ID chưa được cấu hình! Chức năng admin sẽ bị vô hiệu hóa.');
 }
 
-// ─── Load / Save Config ──────────────────────────────────
-function loadConfig() {
+// ─── Load / Save Config (per-user) ───────────────────────
+function loadAllConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw);
+    const config = JSON.parse(raw);
+    // Đảm bảo có key "users"
+    if (!config.users) {
+      config.users = {};
+    }
+    return config;
   } catch {
-    return { spc_st: '', proxy: '' };
+    return { users: {} };
   }
 }
 
-function saveConfig(config) {
+function saveAllConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+function getUserConfig(userId) {
+  const config = loadAllConfig();
+  const userConf = config.users[String(userId)] || {};
+  return {
+    spc_st: userConf.spc_st || '',
+    proxy: userConf.proxy || '',
+  };
+}
+
+function setUserConfigValue(userId, field, value) {
+  const config = loadAllConfig();
+  const uid = String(userId);
+  if (!config.users[uid]) {
+    config.users[uid] = {};
+  }
+  config.users[uid][field] = value;
+  saveAllConfig(config);
+}
+
+function delUserConfigValue(userId, field) {
+  const config = loadAllConfig();
+  const uid = String(userId);
+  if (config.users[uid]) {
+    delete config.users[uid][field];
+    saveAllConfig(config);
+  }
 }
 
 // ─── HTML Escape ─────────────────────────────────────────
@@ -50,14 +83,14 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
-// ─── API Fetch Helper ────────────────────────────────────
-async function fetchAffiliate(productUrl) {
-  const config = loadConfig();
+// ─── API Fetch Helper (per-user) ─────────────────────────
+async function fetchAffiliate(productUrl, userId) {
+  const config = getUserConfig(userId);
 
+  // spc_st là bắt buộc — đã kiểm tra trước khi gọi hàm này
   const params = new URLSearchParams({ product_url: productUrl });
-  if (config.spc_st) {
-    params.append('cookie', config.spc_st);
-  }
+  params.append('cookie', config.spc_st);
+
   if (config.proxy) {
     params.append('proxy', config.proxy);
   }
@@ -105,40 +138,35 @@ console.log(`📋 Admin ID: ${ADMIN_ID || '(chưa cấu hình)'}`);
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const name = escapeHtml(msg.from.first_name || 'bạn');
-  const admin = isAdmin(msg.from.id);
 
   let text = `🛒 <b>Chào ${name}!</b>\n\n`;
   text += `Tôi là Bot tạo <b>Link Affiliate Shopee</b> tự động.\n\n`;
   text += `📌 <b>Cách sử dụng:</b>\n`;
-  text += `Gửi link sản phẩm Shopee cho tôi, ví dụ:\n`;
+  text += `1️⃣ Cài đặt cookie SPC_ST của bạn: /setcookie &lt;cookie&gt;\n`;
+  text += `2️⃣ (Tùy chọn) Cài proxy: /setproxy &lt;proxy&gt;\n`;
+  text += `3️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
+  text += `📎 <b>Link hỗ trợ:</b>\n`;
   text += `• <code>https://shopee.vn/product/...</code>\n`;
   text += `• <code>https://s.shopee.vn/...</code>\n`;
   text += `• <code>https://vn.shp.ee/...</code>\n\n`;
-  text += `Tôi sẽ trả về <b>Link AFF</b> và <b>Mã Code</b> ngay lập tức! 🚀`;
-
-  if (admin) {
-    text += `\n\n🔐 <b>Lệnh Admin:</b>\n`;
-    text += `• /setcookie &lt;cookie&gt; — Cập nhật SPC_ST\n`;
-    text += `• /setproxy &lt;proxy&gt; — Cập nhật proxy HTTP\n`;
-    text += `• /removeproxy — Xóa proxy\n`;
-    text += `• /config — Xem cấu hình hiện tại`;
-  }
+  text += `⚙️ <b>Lệnh cấu hình:</b>\n`;
+  text += `• /setcookie &lt;cookie&gt; — Cài đặt SPC_ST của bạn\n`;
+  text += `• /setproxy &lt;proxy&gt; — Cài đặt proxy HTTP\n`;
+  text += `• /removeproxy — Xóa proxy\n`;
+  text += `• /config — Xem cấu hình hiện tại\n\n`;
+  text += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie trước khi sử dụng bot!`;
 
   bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
 });
 
-// ─── /setcookie Command (Admin) ──────────────────────────
+// ─── /setcookie Command (mọi user) ──────────────────────
 bot.onText(/\/setcookie(?:\s+(.+))?/, (msg, match) => {
   const chatId = msg.chat.id;
-
-  if (!isAdmin(msg.from.id)) {
-    bot.sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-    return;
-  }
+  const userId = msg.from.id;
 
   const cookieValue = match[1]?.trim();
   if (!cookieValue) {
-    bot.sendMessage(chatId, '⚠️ Vui lòng nhập cookie.\n\nCú pháp: <code>/setcookie &lt;giá_trị_cookie&gt;</code>', {
+    bot.sendMessage(chatId, '⚠️ Vui lòng nhập cookie SPC_ST của bạn.\n\nCú pháp: <code>/setcookie &lt;giá_trị_cookie&gt;</code>', {
       parse_mode: 'HTML',
     });
     return;
@@ -147,71 +175,53 @@ bot.onText(/\/setcookie(?:\s+(.+))?/, (msg, match) => {
   // Đảm bảo cookie bắt đầu bằng "SPC_ST="
   const finalCookie = cookieValue.startsWith('SPC_ST=') ? cookieValue : `SPC_ST=${cookieValue}`;
 
-  const config = loadConfig();
-  config.spc_st = finalCookie;
-  saveConfig(config);
+  setUserConfigValue(userId, 'spc_st', finalCookie);
 
-  bot.sendMessage(chatId, `✅ Đã cập nhật cookie SPC_ST!\n\n🔑 Cookie: <code>${escapeHtml(maskCookie(finalCookie))}</code>`, {
+  bot.sendMessage(chatId, `✅ Đã cập nhật cookie SPC_ST của bạn!\n\n🔑 Cookie: <code>${escapeHtml(maskCookie(finalCookie))}</code>`, {
     parse_mode: 'HTML',
   });
 });
 
-// ─── /setproxy Command (Admin) ───────────────────────────
+// ─── /setproxy Command (mọi user) ───────────────────────
 bot.onText(/\/setproxy(?:\s+(.+))?/, (msg, match) => {
   const chatId = msg.chat.id;
-
-  if (!isAdmin(msg.from.id)) {
-    bot.sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-    return;
-  }
+  const userId = msg.from.id;
 
   const proxyValue = match[1]?.trim();
   if (!proxyValue) {
     bot.sendMessage(
       chatId,
-      '⚠️ Vui lòng nhập proxy.\n\nCú pháp: <code>/setproxy http://user:pass@ip:port</code>',
+      '⚠️ Vui lòng nhập proxy của bạn.\n\nCú pháp: <code>/setproxy http://user:pass@ip:port</code>',
       { parse_mode: 'HTML' }
     );
     return;
   }
 
-  const config = loadConfig();
-  config.proxy = proxyValue;
-  saveConfig(config);
+  setUserConfigValue(userId, 'proxy', proxyValue);
 
-  bot.sendMessage(chatId, `✅ Đã cập nhật proxy!\n\n🌐 Proxy: <code>${escapeHtml(proxyValue)}</code>`, {
+  bot.sendMessage(chatId, `✅ Đã cập nhật proxy của bạn!\n\n🌐 Proxy: <code>${escapeHtml(proxyValue)}</code>`, {
     parse_mode: 'HTML',
   });
 });
 
-// ─── /removeproxy Command (Admin) ────────────────────────
+// ─── /removeproxy Command (mọi user) ────────────────────
 bot.onText(/\/removeproxy/, (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
 
-  if (!isAdmin(msg.from.id)) {
-    bot.sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-    return;
-  }
+  delUserConfigValue(userId, 'proxy');
 
-  const config = loadConfig();
-  config.proxy = '';
-  saveConfig(config);
-
-  bot.sendMessage(chatId, '✅ Đã xóa proxy thành công!');
+  bot.sendMessage(chatId, '✅ Đã xóa proxy của bạn thành công!');
 });
 
-// ─── /config Command (Admin) ─────────────────────────────
+// ─── /config Command (mọi user — xem config riêng) ──────
 bot.onText(/\/config/, (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
 
-  if (!isAdmin(msg.from.id)) {
-    bot.sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-    return;
-  }
+  const config = getUserConfig(userId);
 
-  const config = loadConfig();
-
-  let text = `⚙️ <b>Cấu hình hiện tại:</b>\n\n`;
+  let text = `⚙️ <b>Cấu hình của bạn:</b>\n\n`;
   text += `🔑 <b>Cookie SPC_ST:</b>\n<code>${escapeHtml(maskCookie(config.spc_st))}</code>\n\n`;
   text += `🌐 <b>Proxy HTTP:</b>\n<code>${escapeHtml(config.proxy || '(không sử dụng)')}</code>`;
 
@@ -222,6 +232,7 @@ bot.onText(/\/config/, (msg) => {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
+  const userId = msg.from.id;
 
   // Bỏ qua nếu không có text hoặc là command
   if (!text || text.startsWith('/')) return;
@@ -242,12 +253,26 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Kiểm tra spc_st bắt buộc
+  const userConfig = getUserConfig(userId);
+  if (!userConfig.spc_st) {
+    bot.sendMessage(
+      chatId,
+      '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+        'Vui lòng cài đặt trước khi sử dụng:\n' +
+        '<code>/setcookie &lt;giá_trị_cookie&gt;</code>\n\n' +
+        '💡 Lấy SPC_ST từ cookie trình duyệt khi đăng nhập Shopee.',
+      { parse_mode: 'HTML' }
+    );
+    return;
+  }
+
   // Xử lý từng link
   for (const link of shopeeLinks) {
     const processingMsg = await bot.sendMessage(chatId, '⏳ Đang tạo link Affiliate...');
 
     try {
-      const result = await fetchAffiliate(link);
+      const result = await fetchAffiliate(link, userId);
 
       let response = `🛒 <b>Link Affiliate Shopee</b>\n\n`;
       response += `📎 <b>Link gốc:</b>\n${escapeHtml(link)}\n\n`;

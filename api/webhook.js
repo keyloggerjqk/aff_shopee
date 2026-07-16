@@ -1,6 +1,4 @@
 const fetch = require('node-fetch');
-const fs = require('fs');
-const path = require('path');
 
 // ─── Environment Variables ───────────────────────────────
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -20,7 +18,7 @@ const SHOPEE_PATTERNS = [
 ];
 
 // ══════════════════════════════════════════════════════════
-//  UPSTASH REDIS (lưu config: spc_st, proxy)
+//  UPSTASH REDIS (lưu config per-user)
 // ══════════════════════════════════════════════════════════
 async function redisGet(key) {
   if (!UPSTASH_URL || !UPSTASH_TOKEN) {
@@ -60,34 +58,45 @@ async function redisSet(key, value) {
   }
 }
 
-// ══════════════════════════════════════════════════════════
-//  CONFIG MANAGEMENT
-// ══════════════════════════════════════════════════════════
-async function getConfig() {
-  let spc_st = (await redisGet('shopee_bot:spc_st')) || process.env.SPC_ST || '';
-  let proxy = (await redisGet('shopee_bot:proxy')) || process.env.PROXY || '';
-
-  // Fallback to local config.json if not found in Redis / env
-  if (!spc_st || !proxy) {
-    try {
-      const configPath = path.join(process.cwd(), 'config.json');
-      if (fs.existsSync(configPath)) {
-        const raw = fs.readFileSync(configPath, 'utf-8');
-        const localConfig = JSON.parse(raw);
-        if (!spc_st) spc_st = localConfig.spc_st || '';
-        if (!proxy) proxy = localConfig.proxy || '';
-        console.log('Loaded config fallback from config.json');
-      }
-    } catch (err) {
-      console.log('Failed to load local config.json fallback:', err.message);
-    }
+async function redisDel(key) {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    console.log('Upstash Redis not configured, skipping del.');
+    return;
   }
+  try {
+    const res = await fetch(UPSTASH_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${UPSTASH_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['DEL', key]),
+    });
+    console.log(`Redis DEL ${key} status:`, res.status);
+  } catch (err) {
+    console.error('Redis DEL error:', err.message);
+  }
+}
 
+// ══════════════════════════════════════════════════════════
+//  CONFIG MANAGEMENT (per-user)
+// ══════════════════════════════════════════════════════════
+function userKey(userId, field) {
+  return `shopee_bot:user:${userId}:${field}`;
+}
+
+async function getUserConfig(userId) {
+  const spc_st = (await redisGet(userKey(userId, 'spc_st'))) || '';
+  const proxy = (await redisGet(userKey(userId, 'proxy'))) || '';
   return { spc_st, proxy };
 }
 
-async function setConfigValue(key, value) {
-  await redisSet(`shopee_bot:${key}`, value);
+async function setUserConfigValue(userId, field, value) {
+  await redisSet(userKey(userId, field), value);
+}
+
+async function delUserConfigValue(userId, field) {
+  await redisDel(userKey(userId, field));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -143,15 +152,15 @@ function maskCookie(cookie) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  SHOPEE AFFILIATE API
+//  SHOPEE AFFILIATE API (per-user config)
 // ══════════════════════════════════════════════════════════
-async function fetchAffiliate(productUrl) {
-  const config = await getConfig();
+async function fetchAffiliate(productUrl, userId) {
+  const config = await getUserConfig(userId);
 
+  // spc_st là bắt buộc — đã kiểm tra trước khi gọi hàm này
   const params = new URLSearchParams({ product_url: productUrl });
-  if (config.spc_st) {
-    params.append('cookie', config.spc_st);
-  }
+  params.append('cookie', config.spc_st);
+
   if (config.proxy) {
     params.append('proxy', config.proxy);
   }
@@ -189,82 +198,72 @@ async function handleUpdate(update) {
     let reply = `🛒 <b>Chào ${escapeHtml(firstName)}!</b>\n\n`;
     reply += `Tôi là Bot tạo <b>Link Affiliate Shopee</b> tự động.\n\n`;
     reply += `📌 <b>Cách sử dụng:</b>\n`;
-    reply += `Gửi link sản phẩm Shopee cho tôi, ví dụ:\n`;
+    reply += `1️⃣ Cài đặt cookie SPC_ST của bạn: /setcookie &lt;cookie&gt;\n`;
+    reply += `2️⃣ (Tùy chọn) Cài proxy: /setproxy &lt;proxy&gt;\n`;
+    reply += `3️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
+    reply += `📎 <b>Link hỗ trợ:</b>\n`;
     reply += `• <code>https://shopee.vn/product/...</code>\n`;
     reply += `• <code>https://s.shopee.vn/...</code>\n`;
     reply += `• <code>https://vn.shp.ee/...</code>\n\n`;
-    reply += `Tôi sẽ trả về <b>Link AFF</b> và <b>Mã Code</b> ngay lập tức! 🚀`;
-
-    if (isAdmin(userId)) {
-      reply += `\n\n🔐 <b>Lệnh Admin:</b>\n`;
-      reply += `• /setcookie &lt;cookie&gt; — Cập nhật SPC_ST\n`;
-      reply += `• /setproxy &lt;proxy&gt; — Cập nhật proxy HTTP\n`;
-      reply += `• /removeproxy — Xóa proxy\n`;
-      reply += `• /config — Xem cấu hình hiện tại`;
-    }
+    reply += `⚙️ <b>Lệnh cấu hình:</b>\n`;
+    reply += `• /setcookie &lt;cookie&gt; — Cài đặt SPC_ST của bạn\n`;
+    reply += `• /setproxy &lt;proxy&gt; — Cài đặt proxy HTTP\n`;
+    reply += `• /removeproxy — Xóa proxy\n`;
+    reply += `• /config — Xem cấu hình hiện tại\n\n`;
+    reply += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie trước khi sử dụng bot!`;
 
     await sendMessage(chatId, reply);
     return;
   }
 
-  // ── /setcookie ──
+  // ── /setcookie (mọi user) ──
   if (text.startsWith('/setcookie')) {
-    if (!isAdmin(userId)) {
-      await sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-      return;
-    }
     const value = text.replace(/^\/setcookie\s*/, '').trim();
     if (!value) {
-      await sendMessage(chatId, '⚠️ Cú pháp: <code>/setcookie &lt;giá_trị_cookie&gt;</code>');
+      await sendMessage(
+        chatId,
+        '⚠️ Vui lòng nhập cookie SPC_ST của bạn.\n\nCú pháp: <code>/setcookie &lt;giá_trị_cookie&gt;</code>'
+      );
       return;
     }
     const finalCookie = value.startsWith('SPC_ST=') ? value : `SPC_ST=${value}`;
-    await setConfigValue('spc_st', finalCookie);
+    await setUserConfigValue(userId, 'spc_st', finalCookie);
     await sendMessage(
       chatId,
-      `✅ Đã cập nhật cookie SPC_ST!\n\n🔑 Cookie: <code>${escapeHtml(maskCookie(finalCookie))}</code>`
+      `✅ Đã cập nhật cookie SPC_ST của bạn!\n\n🔑 Cookie: <code>${escapeHtml(maskCookie(finalCookie))}</code>`
     );
     return;
   }
 
-  // ── /setproxy ──
+  // ── /setproxy (mọi user) ──
   if (text.startsWith('/setproxy')) {
-    if (!isAdmin(userId)) {
-      await sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-      return;
-    }
     const value = text.replace(/^\/setproxy\s*/, '').trim();
     if (!value) {
-      await sendMessage(chatId, '⚠️ Cú pháp: <code>/setproxy http://user:pass@ip:port</code>');
+      await sendMessage(
+        chatId,
+        '⚠️ Vui lòng nhập proxy của bạn.\n\nCú pháp: <code>/setproxy http://user:pass@ip:port</code>'
+      );
       return;
     }
-    await setConfigValue('proxy', value);
+    await setUserConfigValue(userId, 'proxy', value);
     await sendMessage(
       chatId,
-      `✅ Đã cập nhật proxy!\n\n🌐 Proxy: <code>${escapeHtml(value)}</code>`
+      `✅ Đã cập nhật proxy của bạn!\n\n🌐 Proxy: <code>${escapeHtml(value)}</code>`
     );
     return;
   }
 
-  // ── /removeproxy ──
+  // ── /removeproxy (mọi user) ──
   if (text.startsWith('/removeproxy')) {
-    if (!isAdmin(userId)) {
-      await sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-      return;
-    }
-    await setConfigValue('proxy', '');
-    await sendMessage(chatId, '✅ Đã xóa proxy thành công!');
+    await delUserConfigValue(userId, 'proxy');
+    await sendMessage(chatId, '✅ Đã xóa proxy của bạn thành công!');
     return;
   }
 
-  // ── /config ──
+  // ── /config (mọi user — xem config riêng) ──
   if (text.startsWith('/config')) {
-    if (!isAdmin(userId)) {
-      await sendMessage(chatId, '⛔ Bạn không có quyền sử dụng lệnh này.');
-      return;
-    }
-    const config = await getConfig();
-    let reply = `⚙️ <b>Cấu hình hiện tại:</b>\n\n`;
+    const config = await getUserConfig(userId);
+    let reply = `⚙️ <b>Cấu hình của bạn:</b>\n\n`;
     reply += `🔑 <b>Cookie SPC_ST:</b>\n<code>${escapeHtml(maskCookie(config.spc_st))}</code>\n\n`;
     reply += `🌐 <b>Proxy HTTP:</b>\n<code>${escapeHtml(config.proxy || '(không sử dụng)')}</code>`;
     await sendMessage(chatId, reply);
@@ -288,9 +287,22 @@ async function handleUpdate(update) {
     return;
   }
 
+  // ── Kiểm tra spc_st bắt buộc ──
+  const userConfig = await getUserConfig(userId);
+  if (!userConfig.spc_st) {
+    await sendMessage(
+      chatId,
+      '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+        'Vui lòng cài đặt trước khi sử dụng:\n' +
+        '<code>/setcookie &lt;giá_trị_cookie&gt;</code>\n\n' +
+        '💡 Lấy SPC_ST từ cookie trình duyệt khi đăng nhập Shopee.'
+    );
+    return;
+  }
+
   for (const link of shopeeLinks) {
     try {
-      const result = await fetchAffiliate(link);
+      const result = await fetchAffiliate(link, userId);
 
       let response = `🛒 <b>Link Affiliate Shopee</b>\n\n`;
       response += `📎 <b>Link gốc:</b>\n${escapeHtml(link)}\n\n`;
