@@ -85,10 +85,22 @@ function userKey(userId, field) {
   return `shopee_bot:user:${userId}:${field}`;
 }
 
-async function getUserConfig(userId) {
+async function getUserOwnConfig(userId) {
   const spc_st = (await redisGet(userKey(userId, 'spc_st'))) || '';
   const proxy = (await redisGet(userKey(userId, 'proxy'))) || '';
   return { spc_st, proxy };
+}
+
+// Lấy config hiệu lực: ưu tiên config được share, fallback sang config riêng
+async function getUserConfig(userId) {
+  const sharedFrom = await redisGet(userKey(userId, 'shared_from'));
+  if (sharedFrom) {
+    const sharedConfig = await getUserOwnConfig(sharedFrom);
+    if (sharedConfig.spc_st) {
+      return { ...sharedConfig, shared_from: sharedFrom };
+    }
+  }
+  return await getUserOwnConfig(userId);
 }
 
 async function setUserConfigValue(userId, field, value) {
@@ -97,6 +109,66 @@ async function setUserConfigValue(userId, field, value) {
 
 async function delUserConfigValue(userId, field) {
   await redisDel(userKey(userId, field));
+}
+
+// ══════════════════════════════════════════════════════════
+//  SHARE MANAGEMENT
+// ══════════════════════════════════════════════════════════
+
+// Lấy danh sách ID mà user đang share cho
+async function getSharedToList(userId) {
+  const raw = (await redisGet(userKey(userId, 'shared_to'))) || '';
+  return raw ? raw.split(',').filter(Boolean) : [];
+}
+
+async function setSharedToList(userId, list) {
+  if (list.length === 0) {
+    await redisDel(userKey(userId, 'shared_to'));
+  } else {
+    await redisSet(userKey(userId, 'shared_to'), list.join(','));
+  }
+}
+
+// User A share config cho User B
+async function shareConfigTo(fromUserId, toUserId) {
+  // Kiểm tra xem B đang được ai share
+  const currentSharer = await redisGet(userKey(toUserId, 'shared_from'));
+  
+  // Nếu B đang được share từ người khác, xóa B khỏi danh sách shared_to của người đó
+  if (currentSharer && currentSharer !== String(fromUserId)) {
+    const oldSharerList = await getSharedToList(currentSharer);
+    const updated = oldSharerList.filter(id => id !== String(toUserId));
+    await setSharedToList(currentSharer, updated);
+  }
+
+  // Set B nhận config từ A
+  await redisSet(userKey(toUserId, 'shared_from'), String(fromUserId));
+
+  // Thêm B vào danh sách shared_to của A
+  const shareList = await getSharedToList(fromUserId);
+  if (!shareList.includes(String(toUserId))) {
+    shareList.push(String(toUserId));
+    await setSharedToList(fromUserId, shareList);
+  }
+}
+
+// User A ngừng share cho User B
+async function unshareConfigFrom(fromUserId, toUserId) {
+  // Kiểm tra xem B có đang nhận từ A không
+  const currentSharer = await redisGet(userKey(toUserId, 'shared_from'));
+  if (currentSharer !== String(fromUserId)) {
+    return false;
+  }
+
+  // Xóa shared_from của B
+  await redisDel(userKey(toUserId, 'shared_from'));
+
+  // Xóa B khỏi danh sách shared_to của A
+  const shareList = await getSharedToList(fromUserId);
+  const updated = shareList.filter(id => id !== String(toUserId));
+  await setSharedToList(fromUserId, updated);
+
+  return true;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -210,7 +282,11 @@ async function handleUpdate(update) {
     reply += `• /setproxy &lt;proxy&gt; — Cài đặt proxy HTTP\n`;
     reply += `• /removeproxy — Xóa proxy\n`;
     reply += `• /config — Xem cấu hình hiện tại\n\n`;
-    reply += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie trước khi sử dụng bot!`;
+    reply += `🤝 <b>Chia sẻ config:</b>\n`;
+    reply += `• /share &lt;telegram_id&gt; — Chia sẻ config cho người khác\n`;
+    reply += `• /unshare &lt;telegram_id&gt; — Ngừng chia sẻ\n`;
+    reply += `• /sharelist — Xem danh sách chia sẻ\n\n`;
+    reply += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie hoặc được ai đó /share trước khi sử dụng bot!`;
 
     await sendMessage(chatId, reply);
     return;
@@ -266,7 +342,105 @@ async function handleUpdate(update) {
     let reply = `⚙️ <b>Cấu hình của bạn:</b>\n\n`;
     reply += `🔑 <b>Cookie SPC_ST:</b>\n<code>${escapeHtml(maskCookie(config.spc_st))}</code>\n\n`;
     reply += `🌐 <b>Proxy HTTP:</b>\n<code>${escapeHtml(config.proxy || '(không sử dụng)')}</code>`;
+    if (config.shared_from) {
+      reply += `\n\n🤝 <b>Đang dùng config được chia sẻ từ:</b> <code>${escapeHtml(config.shared_from)}</code>`;
+    }
     await sendMessage(chatId, reply);
+    return;
+  }
+
+  // ── /sharelist ──  (phải đặt trước /share vì startsWith)
+  if (text.startsWith('/sharelist')) {
+    const sharedToList = await getSharedToList(userId);
+    const sharedFrom = await redisGet(userKey(userId, 'shared_from'));
+
+    let reply = `🤝 <b>Thông tin chia sẻ:</b>\n\n`;
+
+    if (sharedToList.length > 0) {
+      reply += `📤 <b>Bạn đang chia sẻ cho:</b>\n`;
+      sharedToList.forEach((id, i) => {
+        reply += `  ${i + 1}. <code>${escapeHtml(id)}</code>\n`;
+      });
+    } else {
+      reply += `📤 <b>Bạn đang chia sẻ cho:</b> (không ai)\n`;
+    }
+
+    reply += `\n`;
+
+    if (sharedFrom) {
+      reply += `📥 <b>Bạn đang nhận config từ:</b> <code>${escapeHtml(sharedFrom)}</code>`;
+    } else {
+      reply += `📥 <b>Bạn đang nhận config từ:</b> (không ai — dùng config riêng)`;
+    }
+
+    await sendMessage(chatId, reply);
+    return;
+  }
+
+  // ── /unshare <telegram_id> ──  (phải đặt trước /share vì startsWith)
+  if (text.startsWith('/unshare')) {
+    const targetId = text.replace(/^\/unshare\s*/, '').trim();
+    if (!targetId || !/^\d+$/.test(targetId)) {
+      await sendMessage(
+        chatId,
+        '⚠️ Vui lòng nhập Telegram ID của người muốn ngừng chia sẻ.\n\n' +
+          'Cú pháp: <code>/unshare &lt;telegram_id&gt;</code>'
+      );
+      return;
+    }
+
+    const result = await unshareConfigFrom(userId, targetId);
+    if (result) {
+      await sendMessage(
+        chatId,
+        `✅ Đã ngừng chia sẻ config cho user <code>${escapeHtml(targetId)}</code>.\n\n` +
+          `Người đó sẽ cần tự cài đặt cookie của mình.`
+      );
+    } else {
+      await sendMessage(
+        chatId,
+        `⚠️ Bạn hiện không chia sẻ config cho user <code>${escapeHtml(targetId)}</code>.`
+      );
+    }
+    return;
+  }
+
+  // ── /share <telegram_id> ──
+  if (text.startsWith('/share')) {
+    const targetId = text.replace(/^\/share\s*/, '').trim();
+    if (!targetId || !/^\d+$/.test(targetId)) {
+      await sendMessage(
+        chatId,
+        '⚠️ Vui lòng nhập Telegram ID của người muốn chia sẻ.\n\n' +
+          'Cú pháp: <code>/share &lt;telegram_id&gt;</code>\n\n' +
+          '💡 Người nhận có thể lấy ID bằng cách nhắn cho bot <code>@userinfobot</code>'
+      );
+      return;
+    }
+    if (targetId === String(userId)) {
+      await sendMessage(chatId, '⚠️ Bạn không thể chia sẻ config cho chính mình!');
+      return;
+    }
+
+    // Kiểm tra user A có spc_st chưa
+    const ownConfig = await getUserOwnConfig(userId);
+    if (!ownConfig.spc_st) {
+      await sendMessage(
+        chatId,
+        '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+          'Vui lòng cài đặt trước khi chia sẻ:\n' +
+          '<code>/setcookie &lt;giá_trị_cookie&gt;</code>'
+      );
+      return;
+    }
+
+    await shareConfigTo(userId, targetId);
+    await sendMessage(
+      chatId,
+      `✅ Đã chia sẻ config cho user <code>${escapeHtml(targetId)}</code>!\n\n` +
+        `🤝 Người đó giờ sẽ dùng cookie và proxy của bạn khi tạo link Affiliate.\n\n` +
+        `💡 Dùng <code>/unshare ${escapeHtml(targetId)}</code> để ngừng chia sẻ.`
+    );
     return;
   }
 
