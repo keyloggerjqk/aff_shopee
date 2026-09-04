@@ -218,20 +218,23 @@ bot.onText(/\/start/, (msg) => {
   let text = `🛒 <b>Chào ${name}!</b>\n\n`;
   text += `Tôi là Bot tạo <b>Link Affiliate Shopee</b> tự động.\n\n`;
   text += `📌 <b>Cách sử dụng:</b>\n`;
-  text += `1️⃣ Cài đặt Affiliate ID: /setid &lt;affiliate_id&gt;\n`;
-  text += `2️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
+  text += `1️⃣ Cài đặt cookie SPC_ST của bạn: /setcookie &lt;cookie&gt;\n`;
+  text += `2️⃣ (Tùy chọn) Cài proxy: /setproxy &lt;proxy&gt;\n`;
+  text += `3️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
   text += `📎 <b>Link hỗ trợ:</b>\n`;
   text += `• <code>https://shopee.vn/product/...</code>\n`;
   text += `• <code>https://s.shopee.vn/...</code>\n`;
   text += `• <code>https://vn.shp.ee/...</code>\n\n`;
   text += `⚙️ <b>Lệnh cấu hình:</b>\n`;
-  text += `• /setid &lt;affiliate_id&gt; — Cài đặt Affiliate ID\n`;
+  text += `• /setcookie &lt;cookie&gt; — Cài đặt SPC_ST của bạn\n`;
+  text += `• /setproxy &lt;proxy&gt; — Cài đặt proxy HTTP\n`;
+  text += `• /removeproxy — Xóa proxy\n`;
   text += `• /config — Xem cấu hình hiện tại\n\n`;
   text += `🤝 <b>Chia sẻ config:</b>\n`;
   text += `• /share &lt;telegram_id&gt; — Chia sẻ config cho người khác\n`;
   text += `• /unshare &lt;telegram_id&gt; — Ngừng chia sẻ\n`;
   text += `• /sharelist — Xem danh sách chia sẻ\n\n`;
-  text += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setid hoặc được ai đó /share trước khi sử dụng bot!`;
+  text += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie hoặc được ai đó /share trước khi sử dụng bot!`;
 
   bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
 });
