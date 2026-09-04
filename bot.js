@@ -426,11 +426,12 @@ bot.on('message', async (msg) => {
     try {
       const result = await fetchAffiliate(link, userId);
 
+      const affLink = result.affiliate_link || result.share_url;
       let response = `🛒 <b>Link Affiliate Shopee</b>\n\n`;
       response += `📎 <b>Link gốc:</b>\n${escapeHtml(link)}\n\n`;
 
-      if (result.share_url) {
-        response += `🔗 <b>Link AFF:</b>\n${escapeHtml(result.share_url)}\n\n`;
+      if (affLink) {
+        response += `🔗 <b>Link AFF:</b>\n${escapeHtml(affLink)}\n\n`;
       }
 
       if (result.share_code) {
