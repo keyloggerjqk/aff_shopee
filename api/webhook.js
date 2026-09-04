@@ -85,10 +85,22 @@ function userKey(userId, field) {
   return `shopee_bot:user:${userId}:${field}`;
 }
 
+function maskId(id) {
+  if (!id) return '(chưa cấu hình)';
+  if (id.length <= 6) return id;
+  return id.substring(0, 4) + '...' + id.substring(id.length - 4);
+}
+
+// ══════════════════════════════════════════════════════════
+//  CONFIG MANAGEMENT (per-user)
+// ══════════════════════════════════════════════════════════
+function userKey(userId, field) {
+  return `shopee_bot:user:${userId}:${field}`;
+}
+
 async function getUserOwnConfig(userId) {
-  const spc_st = (await redisGet(userKey(userId, 'spc_st'))) || '';
-  const proxy = (await redisGet(userKey(userId, 'proxy'))) || '';
-  return { spc_st, proxy };
+  const affiliate_id = (await redisGet(userKey(userId, 'affiliate_id'))) || '';
+  return { affiliate_id };
 }
 
 // Lấy config hiệu lực: ưu tiên config được share, fallback sang config riêng
@@ -96,7 +108,7 @@ async function getUserConfig(userId) {
   const sharedFrom = await redisGet(userKey(userId, 'shared_from'));
   if (sharedFrom) {
     const sharedConfig = await getUserOwnConfig(sharedFrom);
-    if (sharedConfig.spc_st) {
+    if (sharedConfig.affiliate_id) {
       return { ...sharedConfig, shared_from: sharedFrom };
     }
   }
@@ -217,25 +229,16 @@ function isAdmin(userId) {
   return ADMIN_ID && String(userId) === String(ADMIN_ID);
 }
 
-function maskCookie(cookie) {
-  if (!cookie) return '(chưa cấu hình)';
-  if (cookie.length <= 10) return '***';
-  return cookie.substring(0, 6) + '...' + cookie.substring(cookie.length - 4);
-}
-
 // ══════════════════════════════════════════════════════════
 //  SHOPEE AFFILIATE API (per-user config)
 // ══════════════════════════════════════════════════════════
 async function fetchAffiliate(productUrl, userId) {
   const config = await getUserConfig(userId);
 
-  // spc_st là bắt buộc — đã kiểm tra trước khi gọi hàm này
-  const params = new URLSearchParams({ product_url: productUrl });
-  params.append('cookie', config.spc_st);
-
-  if (config.proxy) {
-    params.append('proxy', config.proxy);
-  }
+  const params = new URLSearchParams({
+    product_url: productUrl,
+    affiliate_id: config.affiliate_id,
+  });
 
   const apiUrl = `${API_BASE}/api/affiliate?${params.toString()}`;
 
@@ -261,7 +264,7 @@ async function handleUpdate(update) {
   }
 
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const text = msg.text.trim();
   const userId = msg.from.id;
   const firstName = msg.from.first_name || 'bạn';
 
@@ -270,69 +273,40 @@ async function handleUpdate(update) {
     let reply = `🛒 <b>Chào ${escapeHtml(firstName)}!</b>\n\n`;
     reply += `Tôi là Bot tạo <b>Link Affiliate Shopee</b> tự động.\n\n`;
     reply += `📌 <b>Cách sử dụng:</b>\n`;
-    reply += `1️⃣ Cài đặt cookie SPC_ST của bạn: /setcookie &lt;cookie&gt;\n`;
-    reply += `2️⃣ (Tùy chọn) Cài proxy: /setproxy &lt;proxy&gt;\n`;
-    reply += `3️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
+    reply += `1️⃣ Cài đặt Affiliate ID: /id_aff &lt;affiliate_id&gt;\n`;
+    reply += `2️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
     reply += `📎 <b>Link hỗ trợ:</b>\n`;
     reply += `• <code>https://shopee.vn/product/...</code>\n`;
     reply += `• <code>https://s.shopee.vn/...</code>\n`;
     reply += `• <code>https://vn.shp.ee/...</code>\n\n`;
     reply += `⚙️ <b>Lệnh cấu hình:</b>\n`;
-    reply += `• /setcookie &lt;cookie&gt; — Cài đặt SPC_ST của bạn\n`;
-    reply += `• /setproxy &lt;proxy&gt; — Cài đặt proxy HTTP\n`;
-    reply += `• /removeproxy — Xóa proxy\n`;
+    reply += `• /id_aff &lt;affiliate_id&gt; — Cài đặt Affiliate ID\n`;
     reply += `• /config — Xem cấu hình hiện tại\n\n`;
     reply += `🤝 <b>Chia sẻ config:</b>\n`;
     reply += `• /share &lt;telegram_id&gt; — Chia sẻ config cho người khác\n`;
     reply += `• /unshare &lt;telegram_id&gt; — Ngừng chia sẻ\n`;
     reply += `• /sharelist — Xem danh sách chia sẻ\n\n`;
-    reply += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie hoặc được ai đó /share trước khi sử dụng bot!`;
+    reply += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /id_aff hoặc được ai đó /share trước khi sử dụng bot!`;
 
     await sendMessage(chatId, reply);
     return;
   }
 
-  // ── /setcookie (mọi user) ──
-  if (text.startsWith('/setcookie')) {
-    const value = text.replace(/^\/setcookie\s*/, '').trim();
+  // ── /id_aff hoặc /setid (mọi user) ──
+  if (text.startsWith('/id_aff') || text.startsWith('/setid')) {
+    const value = text.replace(/^\/(?:id_aff|setid)\s*/, '').trim();
     if (!value) {
       await sendMessage(
         chatId,
-        '⚠️ Vui lòng nhập cookie SPC_ST của bạn.\n\nCú pháp: <code>/setcookie &lt;giá_trị_cookie&gt;</code>'
+        '⚠️ Vui lòng nhập Affiliate ID của bạn.\n\nCú pháp: <code>/id_aff &lt;affiliate_id&gt;</code>'
       );
       return;
     }
-    const finalCookie = value.startsWith('SPC_ST=') ? value : `SPC_ST=${value}`;
-    await setUserConfigValue(userId, 'spc_st', finalCookie);
+    await setUserConfigValue(userId, 'affiliate_id', value);
     await sendMessage(
       chatId,
-      `✅ Đã cập nhật cookie SPC_ST của bạn!\n\n🔑 Cookie: <code>${escapeHtml(maskCookie(finalCookie))}</code>`
+      `✅ Đã cập nhật Affiliate ID của bạn!\n\n🆔 ID: <code>${escapeHtml(value)}</code>`
     );
-    return;
-  }
-
-  // ── /setproxy (mọi user) ──
-  if (text.startsWith('/setproxy')) {
-    const value = text.replace(/^\/setproxy\s*/, '').trim();
-    if (!value) {
-      await sendMessage(
-        chatId,
-        '⚠️ Vui lòng nhập proxy của bạn.\n\nCú pháp: <code>/setproxy http://user:pass@ip:port</code>'
-      );
-      return;
-    }
-    await setUserConfigValue(userId, 'proxy', value);
-    await sendMessage(
-      chatId,
-      `✅ Đã cập nhật proxy của bạn!\n\n🌐 Proxy: <code>${escapeHtml(value)}</code>`
-    );
-    return;
-  }
-
-  // ── /removeproxy (mọi user) ──
-  if (text.startsWith('/removeproxy')) {
-    await delUserConfigValue(userId, 'proxy');
-    await sendMessage(chatId, '✅ Đã xóa proxy của bạn thành công!');
     return;
   }
 
@@ -340,8 +314,7 @@ async function handleUpdate(update) {
   if (text.startsWith('/config')) {
     const config = await getUserConfig(userId);
     let reply = `⚙️ <b>Cấu hình của bạn:</b>\n\n`;
-    reply += `🔑 <b>Cookie SPC_ST:</b>\n<code>${escapeHtml(maskCookie(config.spc_st))}</code>\n\n`;
-    reply += `🌐 <b>Proxy HTTP:</b>\n<code>${escapeHtml(config.proxy || '(không sử dụng)')}</code>`;
+    reply += `🆔 <b>Affiliate ID:</b>\n<code>${escapeHtml(config.affiliate_id || '(chưa cấu hình)')}</code>`;
     if (config.shared_from) {
       reply += `\n\n🤝 <b>Đang dùng config được chia sẻ từ:</b> <code>${escapeHtml(config.shared_from)}</code>`;
     }
@@ -394,7 +367,7 @@ async function handleUpdate(update) {
       await sendMessage(
         chatId,
         `✅ Đã ngừng chia sẻ config cho user <code>${escapeHtml(targetId)}</code>.\n\n` +
-          `Người đó sẽ cần tự cài đặt cookie của mình.`
+          `Người đó sẽ cần tự cài đặt Affiliate ID của mình.`
       );
     } else {
       await sendMessage(
@@ -422,14 +395,14 @@ async function handleUpdate(update) {
       return;
     }
 
-    // Kiểm tra user A có spc_st chưa
+    // Kiểm tra user A có affiliate_id chưa
     const ownConfig = await getUserOwnConfig(userId);
-    if (!ownConfig.spc_st) {
+    if (!ownConfig.affiliate_id) {
       await sendMessage(
         chatId,
-        '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+        '❌ Bạn chưa cài đặt <b>Affiliate ID</b>!\n\n' +
           'Vui lòng cài đặt trước khi chia sẻ:\n' +
-          '<code>/setcookie &lt;giá_trị_cookie&gt;</code>'
+          '<code>/id_aff &lt;affiliate_id&gt;</code>'
       );
       return;
     }
@@ -438,7 +411,7 @@ async function handleUpdate(update) {
     await sendMessage(
       chatId,
       `✅ Đã chia sẻ config cho user <code>${escapeHtml(targetId)}</code>!\n\n` +
-        `🤝 Người đó giờ sẽ dùng cookie và proxy của bạn khi tạo link Affiliate.\n\n` +
+        `🤝 Người đó giờ sẽ dùng Affiliate ID của bạn khi tạo link.\n\n` +
         `💡 Dùng <code>/unshare ${escapeHtml(targetId)}</code> để ngừng chia sẻ.`
     );
     return;
@@ -461,15 +434,14 @@ async function handleUpdate(update) {
     return;
   }
 
-  // ── Kiểm tra spc_st bắt buộc ──
+  // ── Kiểm tra affiliate_id bắt buộc ──
   const userConfig = await getUserConfig(userId);
-  if (!userConfig.spc_st) {
+  if (!userConfig.affiliate_id) {
     await sendMessage(
       chatId,
-      '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+      '❌ Bạn chưa cài đặt <b>Affiliate ID</b>!\n\n' +
         'Vui lòng cài đặt trước khi sử dụng:\n' +
-        '<code>/setcookie &lt;giá_trị_cookie&gt;</code>\n\n' +
-        '💡 Lấy SPC_ST từ cookie trình duyệt khi đăng nhập Shopee.'
+        '<code>/id_aff &lt;affiliate_id&gt;</code>'
     );
     return;
   }
