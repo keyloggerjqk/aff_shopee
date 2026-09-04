@@ -50,8 +50,7 @@ function getUserOwnConfig(userId) {
   const config = loadAllConfig();
   const userConf = config.users[String(userId)] || {};
   return {
-    spc_st: userConf.spc_st || '',
-    proxy: userConf.proxy || '',
+    affiliate_id: userConf.affiliate_id || '',
   };
 }
 
@@ -62,17 +61,15 @@ function getUserConfig(userId) {
   const sharedFrom = userConf.shared_from;
   if (sharedFrom) {
     const sharedConf = config.users[String(sharedFrom)] || {};
-    if (sharedConf.spc_st) {
+    if (sharedConf.affiliate_id) {
       return {
-        spc_st: sharedConf.spc_st || '',
-        proxy: sharedConf.proxy || '',
+        affiliate_id: sharedConf.affiliate_id || '',
         shared_from: sharedFrom,
       };
     }
   }
   return {
-    spc_st: userConf.spc_st || '',
-    proxy: userConf.proxy || '',
+    affiliate_id: userConf.affiliate_id || '',
   };
 }
 
@@ -167,13 +164,11 @@ function escapeHtml(text) {
 async function fetchAffiliate(productUrl, userId) {
   const config = getUserConfig(userId);
 
-  // spc_st là bắt buộc — đã kiểm tra trước khi gọi hàm này
-  const params = new URLSearchParams({ product_url: productUrl });
-  params.append('cookie', config.spc_st);
-
-  if (config.proxy) {
-    params.append('proxy', config.proxy);
-  }
+  // affiliate_id là bắt buộc — đã kiểm tra trước khi gọi hàm này
+  const params = new URLSearchParams({
+    product_url: productUrl,
+    affiliate_id: config.affiliate_id,
+  });
 
   const apiUrl = `${API_BASE}/api/affiliate?${params.toString()}`;
 
@@ -202,10 +197,10 @@ function isAdmin(userId) {
   return ADMIN_ID && String(userId) === String(ADMIN_ID);
 }
 
-function maskCookie(cookie) {
-  if (!cookie) return '(chưa cấu hình)';
-  if (cookie.length <= 10) return '***';
-  return cookie.substring(0, 6) + '...' + cookie.substring(cookie.length - 4);
+function maskId(id) {
+  if (!id) return '(chưa cấu hình)';
+  if (id.length <= 6) return id;
+  return id.substring(0, 4) + '...' + id.substring(id.length - 4);
 }
 
 // ─── Bot Init ────────────────────────────────────────────
@@ -223,80 +218,42 @@ bot.onText(/\/start/, (msg) => {
   let text = `🛒 <b>Chào ${name}!</b>\n\n`;
   text += `Tôi là Bot tạo <b>Link Affiliate Shopee</b> tự động.\n\n`;
   text += `📌 <b>Cách sử dụng:</b>\n`;
-  text += `1️⃣ Cài đặt cookie SPC_ST của bạn: /setcookie &lt;cookie&gt;\n`;
-  text += `2️⃣ (Tùy chọn) Cài proxy: /setproxy &lt;proxy&gt;\n`;
-  text += `3️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
+  text += `1️⃣ Cài đặt Affiliate ID: /setid &lt;affiliate_id&gt;\n`;
+  text += `2️⃣ Gửi link sản phẩm Shopee cho tôi!\n\n`;
   text += `📎 <b>Link hỗ trợ:</b>\n`;
   text += `• <code>https://shopee.vn/product/...</code>\n`;
   text += `• <code>https://s.shopee.vn/...</code>\n`;
   text += `• <code>https://vn.shp.ee/...</code>\n\n`;
   text += `⚙️ <b>Lệnh cấu hình:</b>\n`;
-  text += `• /setcookie &lt;cookie&gt; — Cài đặt SPC_ST của bạn\n`;
-  text += `• /setproxy &lt;proxy&gt; — Cài đặt proxy HTTP\n`;
-  text += `• /removeproxy — Xóa proxy\n`;
+  text += `• /setid &lt;affiliate_id&gt; — Cài đặt Affiliate ID\n`;
   text += `• /config — Xem cấu hình hiện tại\n\n`;
   text += `🤝 <b>Chia sẻ config:</b>\n`;
   text += `• /share &lt;telegram_id&gt; — Chia sẻ config cho người khác\n`;
   text += `• /unshare &lt;telegram_id&gt; — Ngừng chia sẻ\n`;
   text += `• /sharelist — Xem danh sách chia sẻ\n\n`;
-  text += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setcookie hoặc được ai đó /share trước khi sử dụng bot!`;
+  text += `⚠️ <b>Lưu ý:</b> Bạn <b>bắt buộc</b> phải cài /setid hoặc được ai đó /share trước khi sử dụng bot!`;
 
   bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
 });
 
-// ─── /setcookie Command (mọi user) ──────────────────────
-bot.onText(/\/setcookie(?:\s+(.+))?/, (msg, match) => {
+// ─── /setid Command (mọi user) ──────────────────────────
+bot.onText(/\/setid(?:\s+(.+))?/, (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  const cookieValue = match[1]?.trim();
-  if (!cookieValue) {
-    bot.sendMessage(chatId, '⚠️ Vui lòng nhập cookie SPC_ST của bạn.\n\nCú pháp: <code>/setcookie &lt;giá_trị_cookie&gt;</code>', {
+  const affId = match[1]?.trim();
+  if (!affId) {
+    bot.sendMessage(chatId, '⚠️ Vui lòng nhập Affiliate ID của bạn.\n\nCú pháp: <code>/setid &lt;affiliate_id&gt;</code>', {
       parse_mode: 'HTML',
     });
     return;
   }
 
-  // Đảm bảo cookie bắt đầu bằng "SPC_ST="
-  const finalCookie = cookieValue.startsWith('SPC_ST=') ? cookieValue : `SPC_ST=${cookieValue}`;
+  setUserConfigValue(userId, 'affiliate_id', affId);
 
-  setUserConfigValue(userId, 'spc_st', finalCookie);
-
-  bot.sendMessage(chatId, `✅ Đã cập nhật cookie SPC_ST của bạn!\n\n🔑 Cookie: <code>${escapeHtml(maskCookie(finalCookie))}</code>`, {
+  bot.sendMessage(chatId, `✅ Đã cập nhật Affiliate ID của bạn!\n\n🆔 ID: <code>${escapeHtml(affId)}</code>`, {
     parse_mode: 'HTML',
   });
-});
-
-// ─── /setproxy Command (mọi user) ───────────────────────
-bot.onText(/\/setproxy(?:\s+(.+))?/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  const proxyValue = match[1]?.trim();
-  if (!proxyValue) {
-    bot.sendMessage(
-      chatId,
-      '⚠️ Vui lòng nhập proxy của bạn.\n\nCú pháp: <code>/setproxy http://user:pass@ip:port</code>',
-      { parse_mode: 'HTML' }
-    );
-    return;
-  }
-
-  setUserConfigValue(userId, 'proxy', proxyValue);
-
-  bot.sendMessage(chatId, `✅ Đã cập nhật proxy của bạn!\n\n🌐 Proxy: <code>${escapeHtml(proxyValue)}</code>`, {
-    parse_mode: 'HTML',
-  });
-});
-
-// ─── /removeproxy Command (mọi user) ────────────────────
-bot.onText(/\/removeproxy/, (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  delUserConfigValue(userId, 'proxy');
-
-  bot.sendMessage(chatId, '✅ Đã xóa proxy của bạn thành công!');
 });
 
 // ─── /config Command (mọi user — xem config riêng) ──────
@@ -307,8 +264,7 @@ bot.onText(/\/config/, (msg) => {
   const config = getUserConfig(userId);
 
   let text = `⚙️ <b>Cấu hình của bạn:</b>\n\n`;
-  text += `🔑 <b>Cookie SPC_ST:</b>\n<code>${escapeHtml(maskCookie(config.spc_st))}</code>\n\n`;
-  text += `🌐 <b>Proxy HTTP:</b>\n<code>${escapeHtml(config.proxy || '(không sử dụng)')}</code>`;
+  text += `🆔 <b>Affiliate ID:</b>\n<code>${escapeHtml(config.affiliate_id || '(chưa cấu hình)')}</code>`;
   if (config.shared_from) {
     text += `\n\n🤝 <b>Đang dùng config được chia sẻ từ:</b> <code>${escapeHtml(config.shared_from)}</code>`;
   }
@@ -337,14 +293,14 @@ bot.onText(/\/share(?:\s+(.+))?/, (msg, match) => {
     return;
   }
 
-  // Kiểm tra user A có spc_st chưa
+  // Kiểm tra user A có affiliate_id chưa
   const ownConfig = getUserOwnConfig(userId);
-  if (!ownConfig.spc_st) {
+  if (!ownConfig.affiliate_id) {
     bot.sendMessage(
       chatId,
-      '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+      '❌ Bạn chưa cài đặt <b>Affiliate ID</b>!\n\n' +
         'Vui lòng cài đặt trước khi chia sẻ:\n' +
-        '<code>/setcookie &lt;giá_trị_cookie&gt;</code>',
+        '<code>/setid &lt;affiliate_id&gt;</code>',
       { parse_mode: 'HTML' }
     );
     return;
@@ -354,7 +310,7 @@ bot.onText(/\/share(?:\s+(.+))?/, (msg, match) => {
   bot.sendMessage(
     chatId,
     `✅ Đã chia sẻ config cho user <code>${escapeHtml(targetId)}</code>!\n\n` +
-      `🤝 Người đó giờ sẽ dùng cookie và proxy của bạn khi tạo link Affiliate.\n\n` +
+      `🤝 Người đó giờ sẽ dùng Affiliate ID của bạn khi tạo link.\n\n` +
       `💡 Dùng <code>/unshare ${escapeHtml(targetId)}</code> để ngừng chia sẻ.`,
     { parse_mode: 'HTML' }
   );
@@ -450,15 +406,14 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Kiểm tra spc_st bắt buộc
+  // Kiểm tra affiliate_id bắt buộc
   const userConfig = getUserConfig(userId);
-  if (!userConfig.spc_st) {
+  if (!userConfig.affiliate_id) {
     bot.sendMessage(
       chatId,
-      '❌ Bạn chưa cài đặt cookie <b>SPC_ST</b>!\n\n' +
+      '❌ Bạn chưa cài đặt <b>Affiliate ID</b>!\n\n' +
         'Vui lòng cài đặt trước khi sử dụng:\n' +
-        '<code>/setcookie &lt;giá_trị_cookie&gt;</code>\n\n' +
-        '💡 Lấy SPC_ST từ cookie trình duyệt khi đăng nhập Shopee.',
+        '<code>/setid &lt;affiliate_id&gt;</code>',
       { parse_mode: 'HTML' }
     );
     return;
